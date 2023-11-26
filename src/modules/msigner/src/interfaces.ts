@@ -87,6 +87,19 @@ export interface IOrdAPIPostPSBTListing {
   tapInternalKey?: string;
 }
 
+export interface IMultiTransferParam {
+  ownerAddress: string;
+  ownerPublicKey: string;
+  ordItem: IOrdItem;
+  paymentUTXOs: utxo[];
+  feeRateTier: string;
+  btcAmount: number;
+  unsignedMultiTransferPSBTBase64?: string;
+  signedMultiTransferPSBTBase64?: string;
+  unsignedMultiTransferInputSize?: number;
+  tapInternalKey?: string;
+}
+
 export interface IListingState {
   seller: {
     makerFeeBp: number;

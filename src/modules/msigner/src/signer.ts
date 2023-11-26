@@ -30,6 +30,7 @@ import { getFees } from './vendors/mempool';
 import {
   FeeProvider,
   IListingState,
+  IMultiTransferParam,
   InvalidArgumentError,
   IOrdAPIPostPSBTBuying,
   IOrdAPIPostPSBTListing,
@@ -500,6 +501,126 @@ Missing:    ${satToBtc(-changeValue)} BTC`;
     listing.buyer.unsignedBuyingPSBTBase64 = psbt.toBase64();
     listing.buyer.unsignedBuyingPSBTInputSize = psbt.data.inputs.length;
     return listing;
+  }
+
+  export async function generateUnsignedMultiTransferPSBTBase64(
+    transferParam: IMultiTransferParam,
+  ) {
+    const psbt = new bitcoin.Psbt({ network });
+
+    let totalInput = 0;
+
+    const [ordinalUtxoTxId, ordinalUtxoVout] =
+    transferParam.ordItem.output.split(':');
+
+    const tx = bitcoin.Transaction.fromHex(
+      await FullnodeRPC.getrawtransaction(
+        transferParam.ordItem.output.split(':')[0],
+      ),
+    );
+
+    // No need to add this witness if the seller is using taproot
+    if (!transferParam.tapInternalKey) {
+      for (const output in tx.outs) {
+        try {
+          tx.setWitness(parseInt(output), []);
+        } catch {}
+      }
+    }
+
+    const input: any = {
+      hash: ordinalUtxoTxId,
+      index: parseInt(ordinalUtxoVout),
+      nonWitnessUtxo: tx.toBuffer(),
+      // No problem in always adding a witnessUtxo here
+      witnessUtxo: tx.outs[parseInt(ordinalUtxoVout)],
+      sighashType:
+        bitcoin.Transaction.SIGHASH_SINGLE |
+        bitcoin.Transaction.SIGHASH_ANYONECANPAY,
+    };
+    
+    // If taproot is used, we need to add the internal key
+    if (transferParam.tapInternalKey) {
+      input.tapInternalKey = toXOnly(
+        tx.toBuffer().constructor(transferParam.tapInternalKey, 'hex'),
+      );
+    }
+
+    psbt.addInput(input);
+
+    totalInput += transferParam.ordItem.outputValue;
+
+    // Add payment utxo inputs
+    for (const utxo of transferParam.paymentUTXOs) {
+      const input: any = {
+        hash: utxo.txid,
+        index: utxo.vout,
+        nonWitnessUtxo: utxo.tx.toBuffer(),
+      };
+
+      const p2shInputWitnessUTXOUn: any = {};
+      const p2shInputRedeemScriptUn: any = {};
+
+      if (isP2SHAddress(transferParam.ownerAddress, network)) {
+        const redeemScript = bitcoin.payments.p2wpkh({
+          pubkey: Buffer.from(transferParam.ownerPublicKey!, 'hex'),
+        }).output;
+        const p2sh = bitcoin.payments.p2sh({
+          redeem: { output: redeemScript },
+        });
+        p2shInputWitnessUTXOUn.witnessUtxo = {
+          script: p2sh.output,
+          value: utxo.value,
+        } as WitnessUtxo;
+        p2shInputRedeemScriptUn.redeemScript = p2sh.redeem?.output;
+      }
+
+      psbt.addInput({
+        ...input,
+        ...p2shInputWitnessUTXOUn,
+        ...p2shInputRedeemScriptUn,
+      });
+
+      totalInput += utxo.value;
+    }
+
+    psbt.addOutput({
+      address: transferParam.ownerAddress,
+      value: transferParam.ordItem.outputValue,
+    });
+
+    psbt.addOutput({
+      address: transferParam.ownerAddress,
+      value: transferParam.btcAmount,
+    });
+
+    const fee = await calculateTxBytesFee(
+      psbt.txInputs.length,
+      psbt.txOutputs.length, // already taken care of the exchange output bytes calculation
+      transferParam.feeRateTier,
+    );
+
+    const totalOutput = psbt.txOutputs.reduce(
+      (partialSum, a) => partialSum + a.value,
+      0,
+    );
+    const changeValue = totalInput - totalOutput - fee;
+
+    if (changeValue < 0) {
+      throw `Your wallet address doesn't have enough funds to buy this inscription.`
+    }
+
+    // Change utxo
+    if (changeValue > DUMMY_UTXO_MIN_VALUE) {
+      psbt.addOutput({
+        address: transferParam.ownerAddress,
+        value: changeValue,
+      });
+    }
+
+    transferParam.unsignedMultiTransferPSBTBase64 = psbt.toBase64();
+    transferParam.unsignedMultiTransferInputSize = psbt.data.inputs.length;
+    return transferParam;
   }
 
   export function mergeSignedBuyingPSBTBase64(

@@ -37,9 +37,9 @@ function SampleComponent() {
     inscriptionNumber: 378285,
     chain: "btc-testnet",
     location:
-      "22930f2deeb95c750646f27e895904c3620cd96badb83313970e2e18938d6a1b:0:0",
+      "37cc1736f0d37e1ba3e877fdba3caa9bd22cff16a626c9a3abcbf71d03e662ca:0:0",
     output:
-      "22930f2deeb95c750646f27e895904c3620cd96badb83313970e2e18938d6a1b:0",
+      "37cc1736f0d37e1ba3e877fdba3caa9bd22cff16a626c9a3abcbf71d03e662ca:0",
     outputValue: 10000,
     owner: "tb1qfwr65fwrcx70wkuvwahax5nuzecd7gafcyczj2",
     listed: false,
@@ -69,6 +69,17 @@ function SampleComponent() {
       platformFeeAddress: "tb1qtxvwypw27plxvvl9saxd2j3v0u4x3kesymgnzx",
       feeRate: 1,
     },
+  });
+
+  const [transferParam, setTransferParam] = useState<any>({
+    ownerAddress: "tb1qfwr65fwrcx70wkuvwahax5nuzecd7gafcyczj2",
+    ownerPublicKey: publicKey.payments,
+    ordItem: ordItem,
+    paymentUTXOs: [],
+    feeRateTier: "5.0",
+    btcAmount: 20000,
+    unsignedMultiTransferPSBTBase64: "",
+    unsignedMultiTransferInputSize: 0,
   });
 
   const handleClickSellerSign = async (e: React.MouseEvent) => {
@@ -145,6 +156,33 @@ function SampleComponent() {
     setBuying(newBuying);
   };
 
+
+  const handleClickMultiTransfer = async (e) => {
+    e.preventDefault();
+    let param = transferParam;
+    const utxosFromMempool = await getUtxosByAddress(address.payments);
+    utxosFromMempool.sort((a, b) => b.value - a.value);
+    const utxos = await mapUtxos(utxosFromMempool);
+    console.log("utxos :>> ", utxos);
+
+    param.paymentUTXOs = utxos.slice(0, 1);
+
+    param = await BuyerSigner.generateUnsignedMultiTransferPSBTBase64(param);
+    let options: SignPsbtOptionsParams = { finalize: false, extractTx: false };
+    const signedPSBT = await sign(
+      address.payments,
+      param.unsignedMultiTransferPSBTBase64,
+      options
+    );
+    param.signedMultiTransferPSBTBase64 = Buffer.from(
+      signedPSBT.hex,
+      "hex"
+    ).toString("base64");
+    const tx = await FullnodeRPC.finalizepsbt(param.signedMultiTransferPSBTBase64);
+    console.log("txHex :>> ", tx.hex);
+    const res = await FullnodeRPC.sendrawtransaction(tx.hex);
+  };
+
   return (
     <div>
       <span>{balance > 0 && `Wallet Balance: ${balance}`}</span>
@@ -205,6 +243,13 @@ function SampleComponent() {
         onClick={handleClickBuyerSign}
       >
         BUYER SIGNAL
+      </button>
+      <button
+        value="buyer_signal"
+        className="myButton"
+        onClick={handleClickMultiTransfer}
+      >
+        MULTI TRANSFER
       </button>
       <textarea
         value={areaText}
